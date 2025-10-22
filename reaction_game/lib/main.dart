@@ -1,122 +1,225 @@
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:sensors_plus/sensors_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const ReactionTimerApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class ReactionTimerApp extends StatelessWidget {
+  const ReactionTimerApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Reaction Timer Game',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const ReactionGamePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class ReactionGamePage extends StatefulWidget {
+  const ReactionGamePage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ReactionGamePage> createState() => _ReactionGamePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ReactionGamePageState extends State<ReactionGamePage> {
+  String gameState = "Shake to Start";
+  DateTime? startTime;
+  int? reactionTime;
+  List<int> scores = [];
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  StreamSubscription? _accelSub;
+  StreamSubscription? _gyroSub;
+  final player = AudioPlayer();
+
+  double gyroThreshold = 3.0;
+  bool allowShake = true;
+
+  @override
+  void initState() {
+    super.initState();
+    loadScores();
+    startSensorDetection();
+  }
+
+  @override
+  void dispose() {
+    _accelSub?.cancel();
+    _gyroSub?.cancel();
+    super.dispose();
+  }
+
+  void startSensorDetection() {
+    _gyroSub = gyroscopeEvents.listen((event) {
+      if ((event.x.abs() + event.y.abs() + event.z.abs()) > gyroThreshold) {
+        allowShake = false;
+      } else {
+        allowShake = true;
+      }
     });
+
+    _accelSub = accelerometerEvents.listen((event) {
+      double gForce =
+          sqrt(event.x * event.x + event.y * event.y + event.z * event.z) /
+          9.81;
+      if (gForce > 2.7 && gameState == "Shake to Start" && allowShake) {
+        onShake();
+      }
+    });
+  }
+
+  void onShake() {
+    setState(() {
+      reactionTime = null;
+      gameState = "Get Ready";
+    });
+    vibrate();
+    startGame();
+  }
+
+  // 🔹 Countdown + random delay
+  Future<void> startGame() async {
+    for (int i = 3; i > 0; i--) {
+      setState(() {
+        gameState = "Get Ready ($i)";
+      });
+      await Future.delayed(const Duration(seconds: 1));
+    }
+
+    final randomDelay = Duration(seconds: Random().nextInt(4) + 2);
+    await Future.delayed(randomDelay);
+
+    setState(() {
+      gameState = "Tap Now!";
+      startTime = DateTime.now();
+    });
+    playStartSound();
+  }
+
+  // 🔹 Tap verwerken
+  void handleTap() {
+    if (gameState == "Tap Now!" && startTime != null) {
+      final rt = DateTime.now().difference(startTime!).inMilliseconds;
+      setState(() {
+        reactionTime = rt;
+        gameState = "Result";
+      });
+      saveScore(rt);
+      vibrate();
+      playTapSound();
+    }
+  }
+
+  // 🔹 Scores opslaan & laden
+  Future<void> saveScore(int score) async {
+    final prefs = await SharedPreferences.getInstance();
+    scores.add(score);
+    scores.sort();
+    if (scores.length > 5) {
+      scores = scores.sublist(0, 5); // top 5
+    }
+    await prefs.setStringList(
+      'scores',
+      scores.map((s) => s.toString()).toList(),
+    );
+    setState(() {});
+  }
+
+  Future<void> loadScores() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('scores') ?? [];
+    scores = saved.map(int.parse).toList();
+    setState(() {});
+  }
+
+  void playStartSound() async {
+    await player.play(AssetSource('start.mp3'));
+  }
+
+  void playTapSound() async {
+    await player.play(AssetSource('tap.mp3'));
+  }
+
+  void vibrate() {
+    HapticFeedback.mediumImpact();
+  }
+
+  // 🔹 Score delen
+  void shareScore() {
+    if (reactionTime != null) {
+      Share.share("Mijn reaction time: ${reactionTime}ms! 🚀");
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
+      backgroundColor: gameState == "Tap Now!" ? Colors.red : Colors.white,
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text("Reaction Timer Game"),
+        actions: [
+          if (reactionTime != null)
+            IconButton(icon: const Icon(Icons.share), onPressed: shareScore),
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: handleTap,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                gameState,
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              if (reactionTime != null)
+                Text(
+                  "Reaction Time: ${reactionTime}ms",
+                  style: const TextStyle(fontSize: 24),
+                ),
+              if (scores.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                const Text("Leaderboard:", style: TextStyle(fontSize: 22)),
+                for (int i = 0; i < scores.length; i++)
+                  Text(
+                    "#${i + 1}: ${scores[i]} ms",
+                    style: const TextStyle(fontSize: 18),
+                  ),
+              ],
+              if (gameState == "Result")
+                Padding(
+                  padding: const EdgeInsets.only(top: 20),
+                  child: ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        gameState = "Shake to Start";
+                      });
+                    },
+                    child: const Text("Opnieuw spelen"),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
