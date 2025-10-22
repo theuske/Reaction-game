@@ -89,7 +89,6 @@ class _ReactionGamePageState extends State<ReactionGamePage> {
     startGame();
   }
 
-  // 🔹 Countdown + random delay
   Future<void> startGame() async {
     for (int i = 3; i > 0; i--) {
       setState(() {
@@ -108,7 +107,6 @@ class _ReactionGamePageState extends State<ReactionGamePage> {
     playStartSound();
   }
 
-  // 🔹 Tap verwerken
   void handleTap() {
     if (gameState == "Tap Now!" && startTime != null) {
       final rt = DateTime.now().difference(startTime!).inMilliseconds;
@@ -122,13 +120,12 @@ class _ReactionGamePageState extends State<ReactionGamePage> {
     }
   }
 
-  // 🔹 Scores opslaan & laden
   Future<void> saveScore(int score) async {
     final prefs = await SharedPreferences.getInstance();
     scores.add(score);
     scores.sort();
     if (scores.length > 5) {
-      scores = scores.sublist(0, 5); // top 5
+      scores = scores.sublist(0, 5);
     }
     await prefs.setStringList(
       'scores',
@@ -156,7 +153,6 @@ class _ReactionGamePageState extends State<ReactionGamePage> {
     HapticFeedback.mediumImpact();
   }
 
-  // 🔹 Score delen
   void shareScore() {
     if (reactionTime != null) {
       Share.share("Mijn reaction time: ${reactionTime}ms! 🚀");
